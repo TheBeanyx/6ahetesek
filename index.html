@@ -25,12 +25,13 @@
             min-height: 100vh; padding: 20px; overflow-x: hidden;
         }
 
-        /* Hitelesítési réteg - ez mindent kitakar, amíg nem dől el ki vagy */
+        /* Overlay a hitelesítéshez */
         #auth-overlay {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%;
             background: var(--bg); z-index: 10000;
             display: flex; justify-content: center; align-items: center;
             flex-direction: column; gap: 20px;
+            transition: opacity 0.5s ease;
         }
 
         .loader {
@@ -46,10 +47,12 @@
             background: rgba(17, 24, 39, 0.8); backdrop-filter: blur(10px);
             border: 1px solid var(--accent); border-radius: 20px;
             padding: 40px; text-align: center; box-shadow: 0 0 30px rgba(0, 246, 255, 0.1);
+            min-height: 200px;
         }
 
         .glow-text {
             text-shadow: 0 0 10px var(--accent); letter-spacing: 3px; margin-bottom: 30px;
+            text-align: center;
         }
 
         .names-display { font-size: 2.5rem; font-weight: bold; margin: 20px 0; color: #fff; }
@@ -63,31 +66,33 @@
             background: transparent; border: 1px solid var(--accent);
             color: var(--accent); padding: 10px 20px; border-radius: 8px;
             cursor: pointer; font-family: 'Lora', sans-serif; transition: 0.3s;
+            text-decoration: none; display: inline-block;
         }
 
         .action-btn:hover { background: var(--accent); color: #000; box-shadow: 0 0 15px var(--accent); }
 
-        .nav-links { margin-top: 40px; display: flex; gap: 15px; }
+        .nav-links { margin-top: 40px; display: flex; gap: 15px; justify-content: center; }
 
-        #user-info { margin-bottom: 20px; font-size: 0.9rem; opacity: 0.8; }
+        #user-info { text-align: center; margin-bottom: 20px; font-size: 0.9rem; opacity: 0.8; }
+
+        .error-msg { color: var(--error); font-weight: bold; }
     </style>
 </head>
 <body>
 
     <div id="auth-overlay">
         <div class="loader"></div>
-        <p id="auth-status">Hitelesítés...</p>
+        <p id="auth-status">Hitelesítés folyamatban...</p>
     </div>
 
     <div class="container">
         <header>
             <h1 class="glow-text">6.A HETESEK</h1>
-            <div id="user-info"></div>
+            <div id="user-info">Betöltés...</div>
         </header>
 
         <main id="dynamic-content" class="main-card">
-            <p>Adatok betöltése...</p>
-        </main>
+            </main>
 
         <div id="admin-area"></div>
 
@@ -102,8 +107,9 @@
         import { getFirestore, doc, getDoc, onSnapshot, updateDoc, increment, addDoc, collection, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js";
         import { getAuth, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-auth.js";
 
+        // MÁSOLD BE IDE A SAJÁT CONFIGODAT!
         const firebaseConfig = {
-            apiKey: "AIzaSy...", // Itt a te kulcsod
+            apiKey: "AIzaSy...", 
             authDomain: "creascola-hetesek.firebaseapp.com",
             projectId: "creascola-hetesek",
             storageBucket: "creascola-hetesek.appspot.com",
@@ -118,97 +124,123 @@
         const contentDiv = document.getElementById('dynamic-content');
         const adminDiv = document.getElementById('admin-area');
         const overlay = document.getElementById('auth-overlay');
+        const authStatus = document.getElementById('auth-status');
 
+        // Ez a függvény figyeli, hogy be vagy-e lépve
         onAuthStateChanged(auth, async (user) => {
             if (user) {
+                // Email szűrés
                 if (!user.email.endsWith('@creascola.hu')) {
-                    alert("Csak Creascolás email megengedett!");
-                    await signOut(auth);
-                    window.location.href = "index.html";
+                    authStatus.innerHTML = "<span class='error-msg'>Hiba: Csak @creascola.hu email engedélyezett!</span>";
+                    setTimeout(() => signOut(auth), 2000);
                     return;
                 }
 
                 try {
-                    // Jogosultság lekérése
-                    const userDoc = await getDoc(doc(db, "felhasznolok", user.uid));
-                    const role = userDoc.exists() ? userDoc.data().rang : 'user';
+                    // Felhasználói profil lekérése
+                    const userRef = doc(db, "felhasznolok", user.uid);
+                    const userDoc = await getDoc(userRef);
 
-                    document.getElementById('user-info').innerText = `${user.email} (${role})`;
+                    if (userDoc.exists()) {
+                        const role = userDoc.data().rang || 'user';
+                        document.getElementById('user-info').innerText = `Bejelentkezve: ${user.email} (${role})`;
+                        
+                        renderUI(role);
+                        startSync();
 
-                    // Felület felépítése
-                    renderPage(role);
-                    startDataListener();
-
-                    // Réteg eltávolítása
-                    overlay.style.display = 'none';
+                        // SIKER: Eltüntetjük a takaró réteget
+                        overlay.style.opacity = '0';
+                        setTimeout(() => overlay.style.display = 'none', 500);
+                    } else {
+                        // Ha nincs dokumentum, nem dobunk ki azonnal, hátha friss regisztráció
+                        authStatus.innerHTML = `
+                            <span class='error-msg'>Nincs profilod az adatbázisban!</span><br>
+                            <small>UID: ${user.uid}</small><br><br>
+                            <a href='index.html' style='color:var(--accent)'>Vissza a regisztrációhoz</a>
+                        `;
+                    }
                 } catch (error) {
                     console.error(error);
-                    document.getElementById('auth-status').innerText = "Hiba a belépésnél. Nincs profilod?";
+                    authStatus.innerHTML = "<span class='error-msg'>Hiba a jogosultságok ellenőrzésekor (Rules hiba)!</span>";
                 }
             } else {
-                window.location.href = "index.html";
+                // Ha nincs user, várunk 1.5 másodpercet (hátha csak tölt a Firebase)
+                // és csak utána dobunk vissza az indexre.
+                setTimeout(() => {
+                    if (!auth.currentUser) {
+                        window.location.href = "index.html";
+                    }
+                }, 1500);
             }
         });
 
-        function renderPage(role) {
-            // Fő tartalom generálása
+        function renderUI(role) {
             contentDiv.innerHTML = `
                 <div class="current-week">
-                    <h2>Ezen a héten:</h2>
-                    <div id="names" class="names-display">Betöltés...</div>
+                    <h2>A hét hetesei:</h2>
+                    <div id="names" class="names-display">...</div>
                 </div>
                 <div style="margin-top:20px; opacity:0.7;">
-                    Következő hetesek: <span id="next-names">...</span>
+                    Következő hét: <span id="next-names">...</span>
                 </div>
             `;
 
-            // Admin panel generálása CSAK ha admin
             if (role === 'admin' || role === 'superadmin') {
                 adminDiv.innerHTML = `
                     <div class="admin-controls">
-                        <button onclick="stepWeek(-1)" class="action-btn">VISSZA</button>
-                        <button onclick="stepWeek(1)" class="action-btn">LÉPTETÉS</button>
-                        <button id="pause-btn" onclick="togglePause()" class="action-btn">SZÜNET</button>
+                        <button onclick="changeWeek(-1)" class="action-btn">ELŐZŐ HÉT</button>
+                        <button onclick="changeWeek(1)" class="action-btn">KÖVETKEZŐ HÉT</button>
+                        <button id="pause-btn" onclick="handlePause()" class="action-btn">SZÜNET</button>
                         <a href="logs.html" class="action-btn" style="border-color:var(--admin-color); color:var(--admin-color);">NAPLÓ</a>
                     </div>
                 `;
             }
         }
 
-        function startDataListener() {
+        function startSync() {
             onSnapshot(doc(db, "beallitasok", "hetesek"), (snap) => {
                 if (snap.exists()) {
                     const d = snap.data();
-                    const idx = ((d.aktualisHet + (d.eltolas || 0) - 1) % d.nevsor.length + d.nevsor.length) % d.nevsor.length;
-                    const nIdx = (idx + 1) % d.nevsor.length;
+                    const nevsor = d.nevsor || [];
+                    const het = d.aktualisHet || 1;
+                    const eltolas = d.eltolas || 0;
 
-                    document.getElementById('names').innerText = `${d.nevsor[idx].a} és ${d.nevsor[idx].b}`;
-                    document.getElementById('next-names').innerText = `${d.nevsor[nIdx].a} és ${d.nevsor[nIdx].b}`;
-                    
-                    const pBtn = document.getElementById('pause-btn');
-                    if (pBtn) pBtn.innerText = d.isPaused ? "▶ FOLYTATÁS" : "⏸ SZÜNET";
+                    if (nevsor.length > 0) {
+                        const idx = ((het + eltolas - 1) % nevsor.length + nevsor.length) % nevsor.length;
+                        const nIdx = (idx + 1) % nevsor.length;
+
+                        document.getElementById('names').innerText = `${nevsor[idx].a} és ${nevsor[idx].b}`;
+                        document.getElementById('next-names').innerText = `${nevsor[nIdx].a} és ${nevsor[nIdx].b}`;
+                        
+                        const pBtn = document.getElementById('pause-btn');
+                        if (pBtn) pBtn.innerText = d.isPaused ? "▶ FOLYTATÁS" : "⏸ SZÜNET";
+                    }
                 }
             });
         }
 
-        // Globálisan elérhetővé tesszük a gombokhoz
+        // Globális függvények a gombokhoz
         window.logout = () => signOut(auth);
 
-        window.stepWeek = async (val) => {
-            const ref = doc(db, "beallitasok", "hetesek");
-            await updateDoc(ref, { eltolas: increment(val) });
-            await addDoc(collection(db, "logs"), {
-                user: auth.currentUser.email,
-                esemeny: `Léptetés: ${val}`,
-                idopont: serverTimestamp()
-            });
+        window.changeWeek = async (val) => {
+            try {
+                const ref = doc(db, "beallitasok", "hetesek");
+                await updateDoc(ref, { eltolas: increment(val) });
+                // Naplózás
+                await addDoc(collection(db, "logs"), {
+                    user: auth.currentUser.email,
+                    esemeny: `Hét módosítva: ${val > 0 ? '+' : ''}${val}`,
+                    idopont: serverTimestamp()
+                });
+            } catch (e) {
+                alert("Nincs jogosultságod a módosításhoz!");
+            }
         };
 
-        window.togglePause = async () => {
+        window.handlePause = async () => {
             const ref = doc(db, "beallitasok", "hetesek");
-            const snap = await getDoc(ref);
-            const newState = !snap.data().isPaused;
-            await updateDoc(ref, { isPaused: newState });
+            const s = await getDoc(ref);
+            await updateDoc(ref, { isPaused: !s.data().isPaused });
         };
     </script>
 </body>
