@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="hu">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link href="https://fonts.googleapis.com/css2?family=Lora:wght@400;700&display=swap" rel="stylesheet">
+    <title>6.A Hetesek - Védett Rendszer</title>
+    
+    <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+
+    <style>
+        :root {
+            --bg: #050a14; 
+            --bg-gradient: radial-gradient(circle at center, #111827 0%, #050a14 100%);
+            --card: #111827;
+            --accent: #00f6ff; --error: #ff4444; --text: #e2e8f0;
+            --input-bg: #070c16; --input-border: #333;
+            --admin-color: #ffaa00;
+        }
+
+        body {
+            margin: 0; font-family: 'Lora', sans-serif; 
+            background: var(--bg-gradient); background-attachment: fixed;
+            color: var(--text); display: flex; flex-direction: column; align-items: center;
+            min-height: 100vh; padding: 20px; overflow-x: hidden;
+        }
+
+        /* Hitelesítési réteg - ez mindent kitakar, amíg nem dől el ki vagy */
+        #auth-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: var(--bg); z-index: 10000;
+            display: flex; justify-content: center; align-items: center;
+            flex-direction: column; gap: 20px;
+        }
+
+        .loader {
+            width: 48px; height: 48px; border: 5px solid #FFF;
+            border-bottom-color: var(--accent); border-radius: 50%;
+            animation: rotation 1s linear infinite;
+        }
+        @keyframes rotation { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
+        .container { width: 100%; max-width: 800px; position: relative; z-index: 1; }
+
+        .main-card {
+            background: rgba(17, 24, 39, 0.8); backdrop-filter: blur(10px);
+            border: 1px solid var(--accent); border-radius: 20px;
+            padding: 40px; text-align: center; box-shadow: 0 0 30px rgba(0, 246, 255, 0.1);
+        }
+
+        .glow-text {
+            text-shadow: 0 0 10px var(--accent); letter-spacing: 3px; margin-bottom: 30px;
+        }
+
+        .names-display { font-size: 2.5rem; font-weight: bold; margin: 20px 0; color: #fff; }
+
+        .admin-controls {
+            margin-top: 30px; padding: 20px; border-top: 1px solid #333;
+            display: flex; flex-wrap: wrap; gap: 10px; justify-content: center;
+        }
+
+        .action-btn {
+            background: transparent; border: 1px solid var(--accent);
+            color: var(--accent); padding: 10px 20px; border-radius: 8px;
+            cursor: pointer; font-family: 'Lora', sans-serif; transition: 0.3s;
+        }
+
+        .action-btn:hover { background: var(--accent); color: #000; box-shadow: 0 0 15px var(--accent); }
+
+        .nav-links { margin-top: 40px; display: flex; gap: 15px; }
+
+        #user-info { margin-bottom: 20px; font-size: 0.9rem; opacity: 0.8; }
+    </style>
+</head>
+<body>
+
+    <div id="auth-overlay">
+        <div class="loader"></div>
+        <p id="auth-status">Hitelesítés...</p>
+    </div>
+
+    <div class="container">
+        <header>
+            <h1 class="glow-text">6.A HETESEK</h1>
+            <div id="user-info"></div>
+        </header>
+
+        <main id="dynamic-content" class="main-card">
+            <p>Adatok betöltése...</p>
+        </main>
+
+        <div id="admin-area"></div>
+
+        <div class="nav-links">
+            <a href="kapcsolat.html" class="action-btn">ÜGYFÉLKAPU</a>
+            <button onclick="logout()" class="action-btn" style="border-color: var(--error); color: var(--error);">KIJELENTKEZÉS</button>
+        </div>
+    </div>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-app.js";
+        import { getFirestore, doc, getDoc, onSnapshot, updateDoc, increment, addDoc, collection, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js";
+        import { getAuth, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-auth.js";
+
+        const firebaseConfig = {
+            apiKey: "AIzaSy...", // Itt a te kulcsod
+            authDomain: "creascola-hetesek.firebaseapp.com",
+            projectId: "creascola-hetesek",
+            storageBucket: "creascola-hetesek.appspot.com",
+            messagingSenderId: "...",
+            appId: "..."
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        const auth = getAuth(app);
+
+        const contentDiv = document.getElementById('dynamic-content');
+        const adminDiv = document.getElementById('admin-area');
+        const overlay = document.getElementById('auth-overlay');
+
+        onAuthStateChanged(auth, async (user) => {
+            if (user) {
+                if (!user.email.endsWith('@creascola.hu')) {
+                    alert("Csak Creascolás email megengedett!");
+                    await signOut(auth);
+                    window.location.href = "index.html";
+                    return;
+                }
+
+                try {
+                    // Jogosultság lekérése
+                    const userDoc = await getDoc(doc(db, "felhasznolok", user.uid));
+                    const role = userDoc.exists() ? userDoc.data().rang : 'user';
+
+                    document.getElementById('user-info').innerText = `${user.email} (${role})`;
+
+                    // Felület felépítése
+                    renderPage(role);
+                    startDataListener();
+
+                    // Réteg eltávolítása
+                    overlay.style.display = 'none';
+                } catch (error) {
+                    console.error(error);
+                    document.getElementById('auth-status').innerText = "Hiba a belépésnél. Nincs profilod?";
+                }
+            } else {
+                window.location.href = "index.html";
+            }
+        });
+
+        function renderPage(role) {
+            // Fő tartalom generálása
+            contentDiv.innerHTML = `
+                <div class="current-week">
+                    <h2>Ezen a héten:</h2>
+                    <div id="names" class="names-display">Betöltés...</div>
+                </div>
+                <div style="margin-top:20px; opacity:0.7;">
+                    Következő hetesek: <span id="next-names">...</span>
+                </div>
+            `;
+
+            // Admin panel generálása CSAK ha admin
+            if (role === 'admin' || role === 'superadmin') {
+                adminDiv.innerHTML = `
+                    <div class="admin-controls">
+                        <button onclick="stepWeek(-1)" class="action-btn">VISSZA</button>
+                        <button onclick="stepWeek(1)" class="action-btn">LÉPTETÉS</button>
+                        <button id="pause-btn" onclick="togglePause()" class="action-btn">SZÜNET</button>
+                        <a href="logs.html" class="action-btn" style="border-color:var(--admin-color); color:var(--admin-color);">NAPLÓ</a>
+                    </div>
+                `;
+            }
+        }
+
+        function startDataListener() {
+            onSnapshot(doc(db, "beallitasok", "hetesek"), (snap) => {
+                if (snap.exists()) {
+                    const d = snap.data();
+                    const idx = ((d.aktualisHet + (d.eltolas || 0) - 1) % d.nevsor.length + d.nevsor.length) % d.nevsor.length;
+                    const nIdx = (idx + 1) % d.nevsor.length;
+
+                    document.getElementById('names').innerText = `${d.nevsor[idx].a} és ${d.nevsor[idx].b}`;
+                    document.getElementById('next-names').innerText = `${d.nevsor[nIdx].a} és ${d.nevsor[nIdx].b}`;
+                    
+                    const pBtn = document.getElementById('pause-btn');
+                    if (pBtn) pBtn.innerText = d.isPaused ? "▶ FOLYTATÁS" : "⏸ SZÜNET";
+                }
+            });
+        }
+
+        // Globálisan elérhetővé tesszük a gombokhoz
+        window.logout = () => signOut(auth);
+
+        window.stepWeek = async (val) => {
+            const ref = doc(db, "beallitasok", "hetesek");
+            await updateDoc(ref, { eltolas: increment(val) });
+            await addDoc(collection(db, "logs"), {
+                user: auth.currentUser.email,
+                esemeny: `Léptetés: ${val}`,
+                idopont: serverTimestamp()
+            });
+        };
+
+        window.togglePause = async () => {
+            const ref = doc(db, "beallitasok", "hetesek");
+            const snap = await getDoc(ref);
+            const newState = !snap.data().isPaused;
+            await updateDoc(ref, { isPaused: newState });
+        };
+    </script>
+</body>
+</html>
